@@ -77,9 +77,16 @@ def get_activities(token: str) -> list:
         if not batch:
             break
         all_activities.extend(batch)
+        print(f"   Page {page}: fetched {len(batch)} activities (total so far: {len(all_activities)})")
         if len(batch) < 100:
             break
         page += 1
+    # Sort newest first
+    all_activities.sort(key=lambda a: a.get("start_date", ""), reverse=True)
+    runs = [a for a in all_activities if a.get("type") == "Run"]
+    print(f"   Total: {len(all_activities)} activities, {len(runs)} runs")
+    if all_activities:
+        print(f"   Most recent: {all_activities[0].get('name')} on {all_activities[0].get('start_date_local', '')[:10]}")
     return all_activities
 
 
@@ -424,9 +431,6 @@ def generate_html(athlete: dict, stats: dict, activities: list, best_efforts: di
     # ---------- athlete info ----------
     full_name = f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip()
     profile_pic = athlete.get("profile", "")
-    city = athlete.get("city", "")
-    country = athlete.get("country", "")
-    location = ", ".join(filter(None, [city, country]))
 
     # ---------- all-time stats ----------
     at = stats.get("all_run_totals", {})
@@ -1013,7 +1017,6 @@ def generate_html(athlete: dict, stats: dict, activities: list, best_efforts: di
       {"<img class='avatar' src='" + profile_pic + "' alt='" + full_name + "' />" if profile_pic else "<div class='avatar-placeholder'>🏃</div>"}
       <div class="athlete-info">
         <h1>{full_name}</h1>
-        {f'<p class="location">📍 {location}</p>' if location else ''}
       </div>
       <a class="blog-link" href="https://owenmurr.co.uk">← Back to blog</a>
       <a class="strava-badge" href="https://www.strava.com/athletes/{athlete.get('id', '')}" target="_blank" rel="noopener">
@@ -1100,17 +1103,29 @@ def main():
     print("🏃  Fetching activities (last 365 days)...")
     activities = get_activities(token)
 
-    print("⚡  Fetching best efforts via segment efforts endpoint...")
+    print("⚡  Fetching all-time best efforts via Strava segment efforts...")
     best_efforts = get_best_efforts(token, athlete_id)
     if best_efforts:
         print(f"   ✅  Found PRs for: {', '.join(best_efforts.keys())}")
     else:
-        print("   ℹ️  No best efforts found via segment endpoint — falling back to activity scan...")
-        best_efforts = extract_best_efforts(activities)
+        print("   ℹ️  Segment endpoint returned nothing — scanning activity details instead...")
+        run_activities = [a for a in activities if a.get("type") == "Run"]
+        print(f"   Fetching details for {len(run_activities)} runs...")
+        detailed = []
+        for act in run_activities:
+            r = requests.get(
+                f"{STRAVA_API_BASE}/activities/{act['id']}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"include_all_efforts": True},
+                timeout=30,
+            )
+            if r.ok:
+                detailed.append(r.json())
+        best_efforts = extract_best_efforts(detailed)
         if best_efforts:
-            print(f"   ✅  Found PRs via fallback for: {', '.join(best_efforts.keys())}")
+            print(f"   ✅  Found PRs for: {', '.join(best_efforts.keys())}")
         else:
-            print("   ℹ️  No best efforts found — check Strava performance settings")
+            print("   ℹ️  No best efforts found — enable 'Analyse efforts on routes' in Strava Settings > Performance")
 
     print("🎨  Generating HTML...")
     html = generate_html(athlete, stats, activities, best_efforts)
