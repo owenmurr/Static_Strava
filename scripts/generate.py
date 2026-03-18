@@ -34,6 +34,9 @@ def refresh_access_token(client_id: str, client_secret: str, refresh_token: str)
     )
     resp.raise_for_status()
     data = resp.json()
+    print(f"✅  Token granted. Scopes: {data.get('scope', 'NOT PRESENT')}")
+    print(f"   Token type: {data.get('token_type', '?')}")
+    print(f"   Athlete ID in token: {data.get('athlete', {}).get('id', 'not embedded')}")
     return data["access_token"]
 
 
