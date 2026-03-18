@@ -95,7 +95,8 @@ def metres_to_miles(m: float) -> str:
     return f"{m / 1609.344:.2f} mi"
 
 
-def seconds_to_hms(s: int) -> str:
+def seconds_to_hms(s) -> str:
+    s = int(s)
     h = s // 3600
     m = (s % 3600) // 60
     sec = s % 60
