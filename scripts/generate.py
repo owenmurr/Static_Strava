@@ -77,7 +77,9 @@ def get_activities(token: str) -> list:
         if not batch:
             break
         all_activities.extend(batch)
-        print(f"   Page {page}: fetched {len(batch)} activities (total so far: {len(all_activities)})")
+        print(f"   Page {page}: {len(batch)} activities (total: {len(all_activities)})")
+        if batch:
+            print(f"   First on page: {batch[0].get('start_date_local', '')[:10]} — Last: {batch[-1].get('start_date_local', '')[:10]}")
         if len(batch) < 100:
             break
         page += 1
@@ -86,7 +88,8 @@ def get_activities(token: str) -> list:
     runs = [a for a in all_activities if a.get("type") == "Run"]
     print(f"   Total: {len(all_activities)} activities, {len(runs)} runs")
     if all_activities:
-        print(f"   Most recent: {all_activities[0].get('name')} on {all_activities[0].get('start_date_local', '')[:10]}")
+        print(f"   Most recent activity: '{all_activities[0].get('name')}' on {all_activities[0].get('start_date_local', '')[:10]}")
+        print(f"   Oldest activity: '{all_activities[-1].get('name')}' on {all_activities[-1].get('start_date_local', '')[:10]}")
     return all_activities
 
 
@@ -1103,29 +1106,30 @@ def main():
     print("🏃  Fetching activities (last 365 days)...")
     activities = get_activities(token)
 
-    print("⚡  Fetching all-time best efforts via Strava segment efforts...")
-    best_efforts = get_best_efforts(token, athlete_id)
+    print("⚡  Fetching best efforts from individual run details...")
+    run_activities = [a for a in activities if a.get("type") == "Run"]
+    print(f"   Fetching details for {len(run_activities)} runs (this may take a moment)...")
+    detailed = []
+    for act in run_activities:
+        r = requests.get(
+            f"{STRAVA_API_BASE}/activities/{act['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"include_all_efforts": True},
+            timeout=30,
+        )
+        if r.ok:
+            d = r.json()
+            efforts = d.get("best_efforts", [])
+            if efforts:
+                print(f"   ✓ '{d.get('name')}' — {len(efforts)} efforts recorded")
+            detailed.append(d)
+        else:
+            print(f"   ⚠️  Could not fetch activity {act['id']}: {r.status_code}")
+    best_efforts = extract_best_efforts(detailed)
     if best_efforts:
         print(f"   ✅  Found PRs for: {', '.join(best_efforts.keys())}")
     else:
-        print("   ℹ️  Segment endpoint returned nothing — scanning activity details instead...")
-        run_activities = [a for a in activities if a.get("type") == "Run"]
-        print(f"   Fetching details for {len(run_activities)} runs...")
-        detailed = []
-        for act in run_activities:
-            r = requests.get(
-                f"{STRAVA_API_BASE}/activities/{act['id']}",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"include_all_efforts": True},
-                timeout=30,
-            )
-            if r.ok:
-                detailed.append(r.json())
-        best_efforts = extract_best_efforts(detailed)
-        if best_efforts:
-            print(f"   ✅  Found PRs for: {', '.join(best_efforts.keys())}")
-        else:
-            print("   ℹ️  No best efforts found — enable 'Analyse efforts on routes' in Strava Settings > Performance")
+        print("   ℹ️  No best efforts found — go to strava.com/settings/performance and enable 'Analyse efforts on routes'")
 
     print("🎨  Generating HTML...")
     html = generate_html(athlete, stats, activities, best_efforts)
