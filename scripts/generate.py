@@ -143,8 +143,21 @@ def activity_icon(activity_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Best efforts extraction
+# Best efforts — via dedicated Strava segment efforts endpoint
 # ---------------------------------------------------------------------------
+
+# Strava's canonical segment IDs for standard race distances
+BEST_EFFORT_SEGMENTS = {
+    "400m":          272052,
+    "1/2 mile":      272053,
+    "1K":            272054,
+    "1 mile":        272055,
+    "2K":            272056,
+    "5K":            272057,
+    "10K":           272058,
+    "Half-Marathon": 272059,
+    "Marathon":      272060,
+}
 
 BEST_EFFORT_DISTANCES = {
     "400m": 400,
@@ -156,9 +169,50 @@ BEST_EFFORT_DISTANCES = {
 }
 
 
+def get_best_efforts(token: str, athlete_id: int) -> dict:
+    """
+    Fetch best efforts using the /athletes/{id}/stats endpoint
+    and the dedicated segment efforts endpoint for each standard distance.
+    Falls back to scanning activities if segment endpoint returns nothing.
+    """
+    bests = {}
+    for label, segment_id in BEST_EFFORT_SEGMENTS.items():
+        if label not in BEST_EFFORT_DISTANCES:
+            continue
+        resp = requests.get(
+            f"{STRAVA_API_BASE}/segment_efforts",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "segment_id": segment_id,
+                "per_page": 1,
+            },
+            timeout=30,
+        )
+        if not resp.ok:
+            print(f"   ⚠️  Could not fetch efforts for {label}: {resp.status_code}")
+            continue
+        efforts = resp.json()
+        if not efforts:
+            continue
+        effort = efforts[0]
+        elapsed = effort.get("elapsed_time", 0)
+        dist_m = BEST_EFFORT_DISTANCES.get(label, 1)
+        start_date = effort.get("start_date_local", "")
+        activity_name = effort.get("activity", {}).get("name", "Unknown")
+        if elapsed > 0:
+            bests[label] = {
+                "time_s": elapsed,
+                "formatted": seconds_to_hms(elapsed),
+                "pace": pace_per_km(dist_m, elapsed),
+                "date": format_date(start_date),
+                "activity_name": activity_name,
+            }
+    return bests
+
+
 def extract_best_efforts(activities: list) -> dict:
     """
-    Scan activities for best efforts.
+    Fallback: scan activity list for embedded best efforts.
     Returns a dict: distance_label -> {time_s, pace, date, activity_name}
     """
     bests: dict = {}
@@ -1046,25 +1100,17 @@ def main():
     print("🏃  Fetching activities (last 365 days)...")
     activities = get_activities(token)
 
-    print("⚡  Extracting best efforts from activities...")
-    # For full best efforts, fetch with best_efforts=true (needs individual activity calls)
-    # We rely on what's embedded in list activities here
-    best_efforts = extract_best_efforts(activities)
-
-    if not best_efforts:
-        print("   ℹ️  No best efforts in list endpoint — fetching detailed activities...")
-        detailed = []
-        for act in activities[:10]:
-            if act.get("type") == "Run":
-                r = requests.get(
-                    f"{STRAVA_API_BASE}/activities/{act['id']}",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"include_all_efforts": True},
-                    timeout=30,
-                )
-                if r.ok:
-                    detailed.append(r.json())
-        best_efforts = extract_best_efforts(detailed)
+    print("⚡  Fetching best efforts via segment efforts endpoint...")
+    best_efforts = get_best_efforts(token, athlete_id)
+    if best_efforts:
+        print(f"   ✅  Found PRs for: {', '.join(best_efforts.keys())}")
+    else:
+        print("   ℹ️  No best efforts found via segment endpoint — falling back to activity scan...")
+        best_efforts = extract_best_efforts(activities)
+        if best_efforts:
+            print(f"   ✅  Found PRs via fallback for: {', '.join(best_efforts.keys())}")
+        else:
+            print("   ℹ️  No best efforts found — check Strava performance settings")
 
     print("🎨  Generating HTML...")
     html = generate_html(athlete, stats, activities, best_efforts)
